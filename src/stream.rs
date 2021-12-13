@@ -164,6 +164,7 @@ impl Write for AssertStream {
                     Ordering::Equal => { }
                 }
                 assert_eq!(buf, data);
+                self.all_index += buf.len();
                 if self.all_index == full_data.len() {
                     self.next_fragment();
                 }
