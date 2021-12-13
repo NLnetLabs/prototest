@@ -1,0 +1,14 @@
+[package]
+name = "testnetproto"
+version = "0.1.0"
+edition = "2021"
+authors = ["The NLnet Labs RPKI team <rpki-team@nlnetlabs.nl>"]
+categories = ["network-programming"]
+description = "A library for testing network protocol implementations."
+documentation = "https://docs.rs/testnetproto/"
+edition = "2021"
+homepage = "https://github.com/NLnetLabs/testnetproto/"
+keywords = ["test", "network", "protocol", "async"]
+license = "BSD-3-Clause"
+
+[dependencies]
