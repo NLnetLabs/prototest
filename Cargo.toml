@@ -6,9 +6,14 @@ authors = ["The NLnet Labs RPKI team <rpki-team@nlnetlabs.nl>"]
 categories = ["network-programming"]
 description = "A library for testing network protocol implementations."
 documentation = "https://docs.rs/testnetproto/"
-edition = "2021"
 homepage = "https://github.com/NLnetLabs/testnetproto/"
 keywords = ["test", "network", "protocol", "async"]
 license = "BSD-3-Clause"
 
 [dependencies]
+ron = "0.7.0"
+serde = { version = "1.0.131", features = [ "derive" ] }
+
+# Optional dependencies
+tokio = { version = "1.14", optional = true }
+
