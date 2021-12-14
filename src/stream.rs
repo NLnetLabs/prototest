@@ -219,9 +219,14 @@ impl AsyncWrite for AssertStream {
 //------------ AssertRules ---------------------------------------------------
 
 /// The rules an followed by an assert stream.
+///
+/// The type is generic over the type of some associated data. This allows you
+/// to define both the stream’s conversation and whatever data should result
+/// from this conversation in one common place.
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct AssertRules {
+pub struct AssertRules<Asoc = ()> {
     pub fragments: Vec<FragmentRule>,
+    pub associated: Asoc,
 }
 
 
