@@ -11,6 +11,7 @@ keywords = ["test", "network", "protocol", "async"]
 license = "BSD-3-Clause"
 
 [dependencies]
+base64 = "0.13.0"
 ron = "0.7.0"
 serde = { version = "1.0.131", features = [ "derive" ] }
 

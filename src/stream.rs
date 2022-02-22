@@ -216,6 +216,7 @@ impl AsyncWrite for AssertStream {
 
 
 
+
 //------------ AssertRules ---------------------------------------------------
 
 /// The rules an followed by an assert stream.
@@ -223,6 +224,11 @@ impl AsyncWrite for AssertStream {
 pub struct AssertRules {
     pub fragments: Vec<FragmentRule>,
 }
+
+
+//------------ AugmentedAssertRules ------------------------------------------
+
+/// Assert rules augmented with additional data.
 
 
 //------------ FragmentRule --------------------------------------------------
