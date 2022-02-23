@@ -9,13 +9,15 @@ use super::core::{AppendData, Recipe};
 //------------ boolean -------------------------------------------------------
 
 /// Returns a recipe for writing a DER-encoded boolean.
-pub fn boolean(value: bool) -> Recipe {
-    if value {
-        core::literal([0x00]).into()
-    }
-    else {
-        core::literal([0xFF]).into()
-    }
+pub fn boolean(x: bool) -> Recipe {
+    value(universal(false, 1), 
+        if x {
+            core::literal([0xFF]).into()
+        }
+        else {
+            core::literal([0x00]).into()
+        }
+    )
 }
 
 
@@ -75,6 +77,12 @@ impl Integer for &'static str {
 impl Integer for String {
     fn append_integer(&self, target: &mut Vec<u8>) {
         append_integer_str(self.as_str(), target);
+    }
+}
+
+impl<const N: usize> Integer for [u8; N] {
+    fn append_integer(&self, target: &mut Vec<u8>) {
+        target.extend_from_slice(self.as_ref())
     }
 }
 
@@ -176,10 +184,106 @@ pub fn ia5_string(content: Recipe) -> Recipe {
 }
 
 
-//------------ context -------------------------------------------------------
+//------------ utc_time ------------------------------------------------------
+
+/// Returns a recipe for writing a time as a UTCTime value.
+pub fn utc_time(time: impl UtcTime) -> Recipe {
+    value(universal(false, 23), UtcTimeContent(time).into())
+}
+
+struct UtcTimeContent<T>(T);
+
+impl<T: UtcTime> AppendData for UtcTimeContent<T> {
+    fn append(&self, target: &mut Vec<u8>) {
+        self.0.append_utc_time(target)
+    }
+}
+
+pub trait UtcTime: 'static {
+    fn append_utc_time(&self, target: &mut Vec<u8>);
+}
+
+impl UtcTime for &'static str {
+    fn append_utc_time(&self, target: &mut Vec<u8>) {
+        target.extend_from_slice(self.as_bytes())
+    }
+}
+
+impl UtcTime for String {
+    fn append_utc_time(&self, target: &mut Vec<u8>) {
+        target.extend_from_slice(self.as_bytes())
+    }
+}
+
+#[cfg(feature = "chrono")]
+impl UtcTime for chrono::DateTime<chrono::offset::Utc> {
+    fn append_utc_time(&self, target: &mut Vec<u8>) {
+        use std::io::Write;
+
+        write!(target, "{}", self.format("%y%m%d%H%M%SZ")).unwrap();
+    }
+}
+
+
+//------------ generalized_time ----------------------------------------------
+
+/// Returns a recipe for writing a time as a GeneralizedTime value.
+pub fn generalized_time(time: impl GeneralizedTime) -> Recipe {
+    value(universal(false, 24), GeneralizedTimeContent(time).into())
+}
+
+struct GeneralizedTimeContent<T>(T);
+
+impl<T: GeneralizedTime> AppendData for GeneralizedTimeContent<T> {
+    fn append(&self, target: &mut Vec<u8>) {
+        self.0.append_generalized_time(target)
+    }
+}
+
+pub trait GeneralizedTime: 'static {
+    fn append_generalized_time(&self, target: &mut Vec<u8>);
+}
+
+impl GeneralizedTime for &'static str {
+    fn append_generalized_time(&self, target: &mut Vec<u8>) {
+        target.extend_from_slice(self.as_bytes())
+    }
+}
+
+impl GeneralizedTime for String {
+    fn append_generalized_time(&self, target: &mut Vec<u8>) {
+        target.extend_from_slice(self.as_bytes())
+    }
+}
+
+#[cfg(feature = "chrono")]
+impl GeneralizedTime for chrono::DateTime<chrono::offset::Utc> {
+    fn append_generalized_time(&self, target: &mut Vec<u8>) {
+        use std::io::Write;
+
+        write!(target, "{}", self.format("%Y%m%d%H%M%SZ")).unwrap();
+    }
+}
+
+
+//------------ x509_time -----------------------------------------------------
+
+/// Returns a recipe for writing a time value following the rules of RFC 5280.
+#[cfg(feature = "chrono")]
+pub fn x509_time(time: chrono::DateTime<chrono::offset::Utc>) -> Recipe {
+    if chrono::Datelike::year(&time) >= 2050 {
+        utc_time(time)
+    }
+    else {
+        generalized_time(time)
+    }
+}
+
+
+//------------ explicit ------------------------------------------------------
 
 /// Returns a recipe for creating an explicitely context-specific taged value.
-pub fn context(number: u128, content: Recipe) -> Recipe {
+pub fn explicit(number: u128, content: Recipe) -> Recipe {
     value(tag(Class::Context, true, number), content)
 }
 
@@ -213,7 +317,9 @@ impl Value {
             // 8.1.3.5. long form - first octet provides the number of
             // subsequent octets with bit 8 forced to 1.
             let usize_octets = (usize::BITS >> 3) as usize;
-            let octets = ((usize::BITS - length.leading_zeros()) >> 3) as usize;
+            let octets = (
+                ((usize::BITS - length.leading_zeros()) >> 3) + 1
+            ) as usize;
             target.push((octets as u8) | 0x80);
             target.extend_from_slice(
                 &length.to_be_bytes()[usize_octets - octets..]
@@ -224,9 +330,7 @@ impl Value {
 
 impl AppendData for Value {
     fn append(&self, target: &mut Vec<u8>) {
-        let mut buf = Vec::new();
-        self.content.append(&mut buf);
-        
+        let buf = self.content.to_vec();
         self.tag.append(target);
         Self::append_length(buf.len(), target);
         target.extend_from_slice(&buf);
@@ -243,6 +347,10 @@ pub fn tag(class: Class, constructed: bool, number: u128) -> Recipe {
 
 pub fn universal(constructed: bool, number: u128) -> Recipe {
     tag(Class::Universal, constructed, number)
+}
+
+pub fn context(constructed: bool, number: u128) -> Recipe {
+    tag(Class::Context, constructed, number)
 }
 
 struct Tag {

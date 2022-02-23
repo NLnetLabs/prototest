@@ -7,9 +7,7 @@ use std::str::FromStr;
 pub fn write_recipe(
     recipe: &Recipe, target: &mut impl io::Write
 ) -> Result<(), io::Error> {
-    let mut buf = Vec::new();
-    recipe.append(&mut buf);
-    target.write_all(&buf)
+    target.write_all(&recipe.to_vec())
 }
 
 
@@ -17,6 +15,12 @@ pub fn write_recipe(
 
 pub trait AppendData {
     fn append(&self, target: &mut Vec<u8>);
+
+    fn to_vec(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+        self.append(&mut buf);
+        buf
+    }
 }
 
 impl<T: AsRef<[u8]>> AppendData for T {

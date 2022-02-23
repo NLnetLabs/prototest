@@ -11,6 +11,7 @@ use {
     tokio::io::{AsyncRead, AsyncWrite, ReadBuf},
 };
 
+
 //------------ AssertStream --------------------------------------------------
 
 /// A stream that sends data and expects certain values in return.
@@ -213,8 +214,6 @@ impl AsyncWrite for AssertStream {
         }
     }
 }
-
-
 
 
 //------------ AssertRules ---------------------------------------------------
