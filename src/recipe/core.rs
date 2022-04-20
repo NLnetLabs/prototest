@@ -1,41 +1,128 @@
 //! Fundamentals for recipes.
+//!
+//! The basis for all recipes is the trait [`Assemble`]. Anything that
+//! implements this trait is considered a recipe. All the actual [`Recipe`]
+//! type does is wrap an `Assemble` trait object to make it more convenient
+//! to deal recipes.
+//!
+//! When assembling actual data from a recipe, this data is stored in a
+//! [`Fragment`] rather than a `Vec<u8>` so we can add useful convenience
+//! functions and trait implementations to it later on.
+//!
+//! This module also provides a number of useful functions to create recipes
+//! from other recipes.
 
-use std::io;
+use std::{borrow, io, ops};
 use std::str::FromStr;
 
 
-pub fn write_recipe(
-    recipe: &Recipe, target: &mut impl io::Write
-) -> Result<(), io::Error> {
-    target.write_all(&recipe.to_vec())
+//------------ Assemble ------------------------------------------------------
+
+/// A type that knows how to assemble some data and add it to a fragment.
+pub trait Assemble {
+    /// Assembles the data and appends it to `target`.
+    fn assemble(&self, target: &mut Fragment);
 }
 
-
-//------------ AppendData ----------------------------------------------------
-
-pub trait AppendData {
-    fn append(&self, target: &mut Vec<u8>);
-
-    fn to_vec(&self) -> Vec<u8> {
-        let mut buf = Vec::new();
-        self.append(&mut buf);
-        buf
-    }
-}
-
-impl<T: AsRef<[u8]>> AppendData for T {
-    fn append(&self, target: &mut Vec<u8>) {
+impl<T: AsRef<[u8]>> Assemble for T {
+    fn assemble(&self, target: &mut Fragment) {
         target.extend_from_slice(self.as_ref())
     }
 }
 
 //------------ Recipe --------------------------------------------------------
 
-pub type Recipe = Box<dyn AppendData>;
+pub struct Recipe(Box<dyn Assemble>);
 
-impl<T: AppendData + 'static> From<T> for Recipe {
+impl Recipe {
+    pub fn assemble(&self, target: &mut Fragment) {
+        self.0.assemble(target);
+    }
+
+    pub fn to_fragment(&self) -> Fragment {
+        let mut buf = Fragment::new();
+        self.assemble(&mut buf);
+        buf
+    }
+
+    pub fn write(
+        &self, target: &mut impl io::Write
+    ) -> Result<(), io::Error> {
+        target.write_all(&self.to_fragment())
+    }
+}
+
+impl<T: Assemble + 'static> From<T> for Recipe {
     fn from(src: T) -> Self {
-        Box::new(src)
+        Recipe(Box::new(src))
+    }
+}
+
+
+//------------ Fragment ------------------------------------------------------
+
+/// A fragment of data produced by executing a recipt.
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct Fragment {
+    data: Vec<u8>,
+}
+
+impl Fragment {
+    /// Creates a new, empty fragment.
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    /// Returns the content of the fragment as a slice.
+    pub fn as_slice(&self) -> &[u8] {
+        self.data.as_ref()
+    }
+
+    /// Appends a single octet the the fragment.
+    pub fn push(&mut self, octet: u8) {
+        self.data.push(octet)
+    }
+
+    /// Appends a the content of a slice of octets to the fragment.
+    pub fn extend_from_slice(&mut self, slice: &[u8]) {
+        self.data.extend_from_slice(slice)
+    }
+}
+
+
+//--- Deref, AsRef, Borrow
+
+impl ops::Deref for Fragment {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        self.as_slice()
+    }
+}
+
+impl AsRef<[u8]> for Fragment {
+    fn as_ref(&self) -> &[u8] {
+        self.as_slice()
+    }
+}
+
+impl borrow::Borrow<[u8]> for Fragment {
+    fn borrow(&self) -> &[u8] {
+        self.as_slice()
+    }
+}
+
+
+//--- io::Write
+
+impl io::Write for Fragment {
+    fn write(&mut self, buf: &[u8]) -> Result<usize, io::Error> {
+        self.data.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> Result<(), io::Error> {
+        Ok(())
     }
 }
 
@@ -51,10 +138,10 @@ struct Sequence<const N: usize> {
     items: [Recipe; N],
 }
 
-impl<const N: usize> AppendData for Sequence<N> {
-    fn append(&self, target: &mut Vec<u8>) {
+impl<const N: usize> Assemble for Sequence<N> {
+    fn assemble(&self, target: &mut Fragment) {
         for item in &self.items {
-            item.append(target)
+            item.assemble(target)
         }
     }
 }
@@ -81,14 +168,30 @@ pub fn hex(hex: impl Into<String>) -> Recipe {
 
 struct Hex(String);
 
-impl AppendData for Hex {
-    fn append(&self, target: &mut Vec<u8>) {
+impl Assemble for Hex {
+    fn assemble(&self, target: &mut Fragment) {
         let mut s = self.0.as_str();
         while !s.is_empty() {
             let (octet, tail) = s.split_at(2);
             target.push(u8::from_str(octet).unwrap());
             s = tail;
         }
+    }
+}
+
+
+//------------ exec ----------------------------------------------------------
+
+/// Returns a recipe executing the given closure whenever data is assembled.
+pub fn exec(op: impl Fn(&mut Fragment) + 'static) -> Recipe {
+    Exec(op).into()
+}
+
+struct Exec<Op>(Op);
+
+impl<Op: Fn(&mut Fragment) + 'static> Assemble for Exec<Op> {
+    fn assemble(&self, target: &mut Fragment) {
+        (self.0)(target)
     }
 }
 

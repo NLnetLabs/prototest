@@ -1,7 +1,7 @@
 //! Encoding data using DER.
 
 use super::core;
-use super::core::{AppendData, Recipe};
+use super::core::{Assemble, Fragment, Recipe};
 
 
 //============ High-level Recipes ============================================
@@ -41,18 +41,18 @@ pub fn context_integer(tag_number: u128, int: impl Integer) -> Recipe {
 
 struct IntegerContent<I>(I);
 
-impl<I: Integer> AppendData for IntegerContent<I> {
-    fn append(&self, target: &mut Vec<u8>) {
-        self.0.append_integer(target)
+impl<I: Integer> Assemble for IntegerContent<I> {
+    fn assemble(&self, target: &mut Fragment) {
+        self.0.assemble_integer(target)
     }
 }
 
 pub trait Integer: 'static {
-    fn append_integer(&self, target: &mut Vec<u8>);
+    fn assemble_integer(&self, target: &mut Fragment);
 }
 
 impl Integer for u8 {
-    fn append_integer(&self, target: &mut Vec<u8>) {
+    fn assemble_integer(&self, target: &mut Fragment) {
         if *self > 127 {
             target.push(0);
         }
@@ -63,37 +63,37 @@ impl Integer for u8 {
 // XXX Add impls for all built-in integer types.
 
 
-fn append_integer_str(_s: &str, _target: &mut Vec<u8>) {
+fn assemble_integer_str(_s: &str, _target: &mut Fragment) {
     // XXX Treat self as a Rust integer literal of indefinite length.
     unimplemented!()
 }
 
 impl Integer for &'static str {
-    fn append_integer(&self, target: &mut Vec<u8>) {
-        append_integer_str(self, target);
+    fn assemble_integer(&self, target: &mut Fragment) {
+        assemble_integer_str(self, target);
     }
 }
 
 impl Integer for String {
-    fn append_integer(&self, target: &mut Vec<u8>) {
-        append_integer_str(self.as_str(), target);
+    fn assemble_integer(&self, target: &mut Fragment) {
+        assemble_integer_str(self.as_str(), target);
     }
 }
 
 impl<const N: usize> Integer for [u8; N] {
-    fn append_integer(&self, target: &mut Vec<u8>) {
+    fn assemble_integer(&self, target: &mut Fragment) {
         target.extend_from_slice(self.as_ref())
     }
 }
 
 impl Integer for &'static [u8] {
-    fn append_integer(&self, target: &mut Vec<u8>) {
+    fn assemble_integer(&self, target: &mut Fragment) {
         target.extend_from_slice(self)
     }
 }
 
 impl Integer for Vec<u8> {
-    fn append_integer(&self, target: &mut Vec<u8>) {
+    fn assemble_integer(&self, target: &mut Fragment) {
         target.extend_from_slice(self)
     }
 }
@@ -158,11 +158,11 @@ pub fn oid<const N: usize>(items: [u128; N]) -> Recipe {
 
 struct Oid<const N: usize>([u128; N]);
 
-impl<const N: usize> AppendData for Oid<N> {
-    fn append(&self, target: &mut Vec<u8>) {
-        append_base_7((self.0[0] * 40) + self.0[1], target);
+impl<const N: usize> Assemble for Oid<N> {
+    fn assemble(&self, target: &mut Fragment) {
+        assemble_base_7((self.0[0] * 40) + self.0[1], target);
         for value in &self.0[2..] {
-            append_base_7(*value, target)
+            assemble_base_7(*value, target)
         }
     }
 }
@@ -193,31 +193,31 @@ pub fn utc_time(time: impl UtcTime) -> Recipe {
 
 struct UtcTimeContent<T>(T);
 
-impl<T: UtcTime> AppendData for UtcTimeContent<T> {
-    fn append(&self, target: &mut Vec<u8>) {
-        self.0.append_utc_time(target)
+impl<T: UtcTime> Assemble for UtcTimeContent<T> {
+    fn assemble(&self, target: &mut Fragment) {
+        self.0.assemble_utc_time(target)
     }
 }
 
 pub trait UtcTime: 'static {
-    fn append_utc_time(&self, target: &mut Vec<u8>);
+    fn assemble_utc_time(&self, target: &mut Fragment);
 }
 
 impl UtcTime for &'static str {
-    fn append_utc_time(&self, target: &mut Vec<u8>) {
+    fn assemble_utc_time(&self, target: &mut Fragment) {
         target.extend_from_slice(self.as_bytes())
     }
 }
 
 impl UtcTime for String {
-    fn append_utc_time(&self, target: &mut Vec<u8>) {
+    fn assemble_utc_time(&self, target: &mut Fragment) {
         target.extend_from_slice(self.as_bytes())
     }
 }
 
 #[cfg(feature = "chrono")]
 impl UtcTime for chrono::DateTime<chrono::offset::Utc> {
-    fn append_utc_time(&self, target: &mut Vec<u8>) {
+    fn assemble_utc_time(&self, target: &mut Fragment) {
         use std::io::Write;
 
         write!(target, "{}", self.format("%y%m%d%H%M%SZ")).unwrap();
@@ -234,31 +234,31 @@ pub fn generalized_time(time: impl GeneralizedTime) -> Recipe {
 
 struct GeneralizedTimeContent<T>(T);
 
-impl<T: GeneralizedTime> AppendData for GeneralizedTimeContent<T> {
-    fn append(&self, target: &mut Vec<u8>) {
-        self.0.append_generalized_time(target)
+impl<T: GeneralizedTime> Assemble for GeneralizedTimeContent<T> {
+    fn assemble(&self, target: &mut Fragment) {
+        self.0.assemble_generalized_time(target)
     }
 }
 
 pub trait GeneralizedTime: 'static {
-    fn append_generalized_time(&self, target: &mut Vec<u8>);
+    fn assemble_generalized_time(&self, target: &mut Fragment);
 }
 
 impl GeneralizedTime for &'static str {
-    fn append_generalized_time(&self, target: &mut Vec<u8>) {
+    fn assemble_generalized_time(&self, target: &mut Fragment) {
         target.extend_from_slice(self.as_bytes())
     }
 }
 
 impl GeneralizedTime for String {
-    fn append_generalized_time(&self, target: &mut Vec<u8>) {
+    fn assemble_generalized_time(&self, target: &mut Fragment) {
         target.extend_from_slice(self.as_bytes())
     }
 }
 
 #[cfg(feature = "chrono")]
 impl GeneralizedTime for chrono::DateTime<chrono::offset::Utc> {
-    fn append_generalized_time(&self, target: &mut Vec<u8>) {
+    fn assemble_generalized_time(&self, target: &mut Fragment) {
         use std::io::Write;
 
         write!(target, "{}", self.format("%Y%m%d%H%M%SZ")).unwrap();
@@ -306,7 +306,7 @@ struct Value {
 }
 
 impl Value {
-    fn append_length(length: usize, target: &mut Vec<u8>) {
+    fn assemble_length(length: usize, target: &mut Fragment) {
         // 10.1. Always definite form with the minimal number of octets.
         // So, if < 128 short form, otherwise long form.
         if length < 128 {
@@ -328,12 +328,12 @@ impl Value {
     }
 }
 
-impl AppendData for Value {
-    fn append(&self, target: &mut Vec<u8>) {
-        let buf = self.content.to_vec();
-        self.tag.append(target);
-        Self::append_length(buf.len(), target);
-        target.extend_from_slice(&buf);
+impl Assemble for Value {
+    fn assemble(&self, target: &mut Fragment) {
+        let content = self.content.to_fragment();
+        self.tag.assemble(target);
+        Self::assemble_length(content.len(), target);
+        target.extend_from_slice(content.as_ref());
     }
 }
 
@@ -359,8 +359,8 @@ struct Tag {
     number: u128
 }
 
-impl AppendData for Tag {
-    fn append(&self, target: &mut Vec<u8>) {
+impl Assemble for Tag {
+    fn assemble(&self, target: &mut Fragment) {
         let mut first = match self.class {
             Class::Universal => 0,
             Class::Application => 0b0100_0000,
@@ -375,12 +375,12 @@ impl AppendData for Tag {
         }
         else {
             target.push(first | 0b0001_1111);
-            append_base_7(self.number, target)
+            assemble_base_7(self.number, target)
         }
     }
 }
 
-fn append_base_7(mut number: u128, target: &mut Vec<u8>) {
+fn assemble_base_7(mut number: u128, target: &mut Fragment) {
     // Convert the number into base 7. We use bytes for
     // the digits and leave the left-most bit at 0. A 128 bit number
     // can be at most 19 digits long. So we start with an empty octet
