@@ -9,7 +9,7 @@
 //! When a recipe is _assembled,_ it is written into a [`Fragment`], which
 //! is mostly a `Vec<u8>` with some convenience functions added.
 
-pub use self::core::{Recipe, Fragment};
+pub use self::core::{Assemble, Recipe, Fragment};
 
 pub mod core;
 pub mod der;

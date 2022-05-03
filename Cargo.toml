@@ -1,5 +1,5 @@
 [package]
-name = "testnetproto"
+name = "prototest"
 version = "0.1.0"
 edition = "2021"
 authors = ["The NLnet Labs RPKI team <rpki-team@nlnetlabs.nl>"]

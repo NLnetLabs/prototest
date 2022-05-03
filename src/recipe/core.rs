@@ -1,60 +1,103 @@
 //! Fundamentals for recipes.
-//!
-//! The basis for all recipes is the trait [`Assemble`]. Anything that
-//! implements this trait is considered a recipe. All the actual [`Recipe`]
-//! type does is wrap an `Assemble` trait object to make it more convenient
-//! to deal recipes.
-//!
-//! When assembling actual data from a recipe, this data is stored in a
-//! [`Fragment`] rather than a `Vec<u8>` so we can add useful convenience
-//! functions and trait implementations to it later on.
-//!
-//! This module also provides a number of useful functions to create recipes
-//! from other recipes.
 
 use std::{borrow, io, ops};
-use std::str::FromStr;
 
-
-//------------ Assemble ------------------------------------------------------
-
-/// A type that knows how to assemble some data and add it to a fragment.
-pub trait Assemble {
-    /// Assembles the data and appends it to `target`.
-    fn assemble(&self, target: &mut Fragment);
-}
-
-impl<T: AsRef<[u8]>> Assemble for T {
-    fn assemble(&self, target: &mut Fragment) {
-        target.extend_from_slice(self.as_ref())
-    }
-}
 
 //------------ Recipe --------------------------------------------------------
 
-pub struct Recipe(Box<dyn Assemble>);
 
-impl Recipe {
-    pub fn assemble(&self, target: &mut Fragment) {
-        self.0.assemble(target);
-    }
+/// A type that knows how to assemble some data and add it to a fragment.
+pub trait Recipe {
+    /// Assembles the data andd appends it a fragment.
+    fn assemble(&self, target: &mut Fragment);
 
-    pub fn to_fragment(&self) -> Fragment {
-        let mut buf = Fragment::new();
-        self.assemble(&mut buf);
-        buf
-    }
-
-    pub fn write(
-        &self, target: &mut impl io::Write
-    ) -> Result<(), io::Error> {
-        target.write_all(&self.to_fragment())
+    /// Assembles the data into a new vec.
+    fn to_fragment(&self) -> Fragment {
+        let mut frag = Fragment::new();
+        self.assemble(&mut frag);
+        frag
     }
 }
 
-impl<T: Assemble + 'static> From<T> for Recipe {
+impl<'a, T: Recipe> Recipe for &'a T {
+    fn assemble(&self, target: &mut Fragment) {
+        (*self).assemble(target)
+    }
+}
+
+impl<T: Recipe + 'static> From<T> for Box<dyn Recipe> {
     fn from(src: T) -> Self {
-        Recipe(Box::new(src))
+        Box::new(src)
+    }
+}
+
+impl<
+    N0: Recipe,
+    N1: Recipe,
+> Recipe for (N0, N1) {
+    fn assemble(&self, target: &mut Fragment) {
+        self.0.assemble(target);
+        self.1.assemble(target);
+    }
+}
+
+impl<
+    N0: Recipe,
+    N1: Recipe,
+    N2: Recipe,
+> Recipe for (N0, N1, N2) {
+    fn assemble(&self, target: &mut Fragment) {
+        self.0.assemble(target);
+        self.1.assemble(target);
+        self.2.assemble(target);
+    }
+}
+
+impl<
+    N0: Recipe,
+    N1: Recipe,
+    N2: Recipe,
+    N3: Recipe,
+> Recipe for (N0, N1, N2, N3) {
+    fn assemble(&self, target: &mut Fragment) {
+        self.0.assemble(target);
+        self.1.assemble(target);
+        self.2.assemble(target);
+        self.3.assemble(target);
+    }
+}
+
+impl<
+    N0: Recipe,
+    N1: Recipe,
+    N2: Recipe,
+    N3: Recipe,
+    N4: Recipe,
+> Recipe for (N0, N1, N2, N3, N4) {
+    fn assemble(&self, target: &mut Fragment) {
+        self.0.assemble(target);
+        self.1.assemble(target);
+        self.2.assemble(target);
+        self.3.assemble(target);
+        self.4.assemble(target);
+    }
+}
+
+impl<
+    N0: Recipe,
+    N1: Recipe,
+    N2: Recipe,
+    N3: Recipe,
+    N4: Recipe,
+    N5: Recipe,
+> Recipe for (N0, N1, N2, N3, N4, N5) {
+    fn assemble(&self, target: &mut Fragment) {
+        self.0.assemble(target);
+        self.1.assemble(target);
+        self.2.assemble(target);
+        self.3.assemble(target);
+        self.4.assemble(target);
+        self.5.assemble(target);
     }
 }
 
@@ -62,7 +105,7 @@ impl<T: Assemble + 'static> From<T> for Recipe {
 //------------ Fragment ------------------------------------------------------
 
 /// A fragment of data produced by executing a recipt.
-#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Default, Hash, Ord, PartialOrd)]
 pub struct Fragment {
     data: Vec<u8>,
 }
@@ -88,6 +131,17 @@ impl Fragment {
         self.data.extend_from_slice(slice)
     }
 }
+
+
+//--- PartialEq and Eq
+
+impl<T: AsRef<[u8]>> PartialEq<T> for Fragment {
+    fn eq(&self, other: &T) -> bool {
+        self.data.eq(other.as_ref())
+    }
+}
+
+impl Eq for Fragment { }
 
 
 //--- Deref, AsRef, Borrow
@@ -127,22 +181,39 @@ impl io::Write for Fragment {
 }
 
 
-//------------ sequence ------------------------------------------------------
+//------------ iter ----------------------------------------------------------
 
-/// Constructs a recipe invoking a sequence of other recipes in order.
-pub fn sequence<const N: usize>(items: [Recipe; N]) -> Recipe {
-    Sequence { items }.into()
+/// Returns a recipe iterating over and assembling the items of an iterator.
+pub fn iter<T>(iter: T) -> Iter<T> {
+    Iter(iter)
 }
 
-struct Sequence<const N: usize> {
-    items: [Recipe; N],
-}
+pub struct Iter<T>(T);
 
-impl<const N: usize> Assemble for Sequence<N> {
+impl<T> Recipe for Iter<T>
+where
+    for<'a> &'a T: IntoIterator,
+    for<'a> <&'a T as IntoIterator>::Item: Recipe,
+{
     fn assemble(&self, target: &mut Fragment) {
-        for item in &self.items {
+        for item in &self.0 {
             item.assemble(target)
         }
+    }
+}
+
+
+//------------ empty ---------------------------------------------------------
+
+/// Returns an empty recipe.
+pub fn empty() -> Empty {
+    Empty
+}
+
+pub struct Empty;
+
+impl Recipe for Empty {
+    fn assemble(&self, _: &mut Fragment) {
     }
 }
 
@@ -154,28 +225,118 @@ impl<const N: usize> Assemble for Sequence<N> {
 /// The function accepts any static object that implements `AsRef<[u8]>`.
 /// Appart from actual string and bytes literals, these are also `u8` arrays,
 /// which comes in handy when describing actual binary data.
-pub fn literal(literal: impl AsRef<[u8]> + 'static) -> Recipe {
-    literal.into()
+pub fn literal<T: AsRef<[u8]> + 'static>(literal: T) -> Literal<T> {
+    Literal(literal)
+}
+
+pub struct Literal<T>(T);
+
+impl<T: AsRef<[u8]> + 'static> Recipe for Literal<T> {
+    fn assemble(&self, target: &mut Fragment) {
+        target.extend_from_slice(self.0.as_ref())
+    }
 }
 
 
 //------------ hex -----------------------------------------------------------
 
-/// Returns a recipe writing out the given hex string.
-pub fn hex(hex: impl Into<String>) -> Recipe {
-    Hex(hex.into()).into()
+/// Returns a recipe writing out the given hex string as binary data.
+///
+/// The string must consist of hex digits and white space only with an even
+/// number of hex digits. Pairs of hex digits are then interpreted as the
+/// values of an octet in hexadecimal notation.
+///
+/// The function accepts any static object that implements `AsRef<str>`.
+pub fn hex<T: AsRef<str>>(hex: T) -> Hex<T> {
+    Hex(hex).check()
 }
 
-struct Hex(String);
+pub struct Hex<T>(T);
 
-impl Assemble for Hex {
-    fn assemble(&self, target: &mut Fragment) {
-        let mut s = self.0.as_str();
-        while !s.is_empty() {
-            let (octet, tail) = s.split_at(2);
-            target.push(u8::from_str(octet).unwrap());
-            s = tail;
+impl<T: AsRef<str>> Hex<T> {
+    /// Checks that the contained string is valid.
+    ///
+    /// Panics if it isn’t.
+    fn check(self) -> Self {
+        let mut count = 0;
+        for ch in self.0.as_ref().chars() {
+            if ch.is_ascii_whitespace() { }
+            else if ch.is_digit(16) {
+                count += 1
+            }
+            else {
+                panic!("Invalid hex string '{}'", self.0.as_ref())
+            }
         }
+        if count % 2 != 0 {
+            panic!("Uneven hex string '{}'", self.0.as_ref())
+        }
+        self
+    }
+}
+
+impl<T: AsRef<str>> Recipe for Hex<T> {
+    fn assemble(&self, target: &mut Fragment) {
+        // The contained string has been checked, so we can assume it to be
+        // only whitespace and an even number of hex digits.
+        let mut chars = self.0.as_ref().chars().filter_map(|ch| {
+            ch.to_digit(16).map(|ch| ch as u8)
+        });
+        while let Some(ch1) = chars.next(){
+            target.push((ch1 << 4) | chars.next().unwrap())
+        }
+    }
+}
+
+
+//------------ be ------------------------------------------------------------
+
+/// Returns a recipe writing the given integer in big-endian encoding.
+pub fn be<T: IntoBigEndian>(int: T) -> Literal<T::Literal> {
+    Literal(int.into_be())
+}
+
+pub trait IntoBigEndian {
+    type Literal: AsRef<[u8]> + 'static;
+
+    fn into_be(self) -> Self::Literal;
+}
+
+macro_rules! into_be {
+    ( $type:ident) => {
+        impl IntoBigEndian for $type {
+            type Literal = [u8; ($type::BITS as usize) >> 3];
+
+            fn into_be(self) -> Self::Literal {
+                self.to_be_bytes()
+            }
+        }
+    }
+}
+
+into_be!(u16);
+into_be!(u32);
+into_be!(u64);
+into_be!(u128);
+into_be!(i16);
+into_be!(i32);
+into_be!(i64);
+into_be!(i128);
+
+impl IntoBigEndian for u8 {
+    type Literal = [u8; 1];
+
+    fn into_be(self) -> Self::Literal {
+        [self]
+    }
+}
+
+
+impl IntoBigEndian for i8 {
+    type Literal = [u8; 1];
+
+    fn into_be(self) -> Self::Literal {
+        [self as u8]
     }
 }
 
@@ -183,15 +344,16 @@ impl Assemble for Hex {
 //------------ exec ----------------------------------------------------------
 
 /// Returns a recipe executing the given closure whenever data is assembled.
-pub fn exec(op: impl Fn(&mut Fragment) + 'static) -> Recipe {
+pub fn exec<Op: Fn(&mut Fragment) + 'static>(op: Op) -> Exec<Op> {
     Exec(op).into()
 }
 
-struct Exec<Op>(Op);
+pub struct Exec<Op>(Op);
 
-impl<Op: Fn(&mut Fragment) + 'static> Assemble for Exec<Op> {
+impl<Op: Fn(&mut Fragment) + 'static> Recipe for Exec<Op> {
     fn assemble(&self, target: &mut Fragment) {
         (self.0)(target)
     }
 }
+
 

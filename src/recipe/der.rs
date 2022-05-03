@@ -1,311 +1,104 @@
 //! Encoding data using DER.
 
-use super::core;
-use super::core::{Assemble, Fragment, Recipe};
+use super::core::{Fragment, Recipe, literal};
 
 
-//============ High-level Recipes ============================================
+//============ Basic Machinery ===============================================
 
-//------------ boolean -------------------------------------------------------
+/// A type representing the content of a DER encoded value.
+pub trait DerContent {
+    /// Returns whether the content is a constructed value or not.
+    fn is_constructed(&self) -> bool;
 
-/// Returns a recipe for writing a DER-encoded boolean.
-pub fn boolean(x: bool) -> Recipe {
-    value(universal(false, 1), 
-        if x {
-            core::literal([0xFF]).into()
-        }
-        else {
-            core::literal([0x00]).into()
-        }
-    )
+    /// Assembles the content into the target.
+    fn assemble_content(&self, target: &mut Fragment);
 }
 
-
-//------------ integer -------------------------------------------------------
-
-/// Returns a recipe for writing a DER-encoded integer.
-pub fn integer(int: impl Integer) -> Recipe {
-    value(universal(false, 2), IntegerContent(int).into())
-}
-
-/// Returns a recipe for writing an implicitely tagged integer.
-///
-/// The recipe will implicitely tag the integer as context specific with the
-/// given tag number.
-pub fn context_integer(tag_number: u128, int: impl Integer) -> Recipe {
-    value(
-        tag(Class::Context, false, tag_number),
-        IntegerContent(int).into()
-    )
-}
-
-struct IntegerContent<I>(I);
-
-impl<I: Integer> Assemble for IntegerContent<I> {
-    fn assemble(&self, target: &mut Fragment) {
-        self.0.assemble_integer(target)
+impl<'a, C: DerContent> DerContent for &'a C {
+    fn is_constructed(&self) -> bool {
+        (*self).is_constructed()
     }
-}
 
-pub trait Integer: 'static {
-    fn assemble_integer(&self, target: &mut Fragment);
-}
-
-impl Integer for u8 {
-    fn assemble_integer(&self, target: &mut Fragment) {
-        if *self > 127 {
-            target.push(0);
-        }
-        target.push(*self);
-    }
-}
-
-// XXX Add impls for all built-in integer types.
-
-
-fn assemble_integer_str(_s: &str, _target: &mut Fragment) {
-    // XXX Treat self as a Rust integer literal of indefinite length.
-    unimplemented!()
-}
-
-impl Integer for &'static str {
-    fn assemble_integer(&self, target: &mut Fragment) {
-        assemble_integer_str(self, target);
-    }
-}
-
-impl Integer for String {
-    fn assemble_integer(&self, target: &mut Fragment) {
-        assemble_integer_str(self.as_str(), target);
-    }
-}
-
-impl<const N: usize> Integer for [u8; N] {
-    fn assemble_integer(&self, target: &mut Fragment) {
-        target.extend_from_slice(self.as_ref())
-    }
-}
-
-impl Integer for &'static [u8] {
-    fn assemble_integer(&self, target: &mut Fragment) {
-        target.extend_from_slice(self)
-    }
-}
-
-impl Integer for Vec<u8> {
-    fn assemble_integer(&self, target: &mut Fragment) {
-        target.extend_from_slice(self)
+    fn assemble_content(&self, target: &mut Fragment) {
+        (*self).assemble_content(target)
     }
 }
 
 
-//------------ bitstring -----------------------------------------------------
+//------------ constructed ---------------------------------------------------
 
-/// Returns a recipe for writing a DER-encoded bitstring.
-///
-/// The content of the bit string will be taken from whatever the _content_
-/// recipe produces. The number of unused bits in the last octet of the
-/// content is given via _unused_. Note that for a correctly encoded bit
-/// string, the unused bits need to be zero. The recipe does _not_ ensure they
-/// are.
-///
-/// Naturally, _unused_ cannot be larger than 7. However, in order to make
-/// it possible to create broken values, the recipe does not check this
-/// either.
-pub fn bitstring(unused: u8, content: Recipe) -> Recipe {
-    value(universal(false, 3), core::sequence([[unused].into(), content]))
+/// Returns a recipe for turning any recipe into constructed DER content.
+pub fn constructed<R>(content: R) -> ConstructedDerContent<R> {
+    ConstructedDerContent(content)
 }
 
+pub struct ConstructedDerContent<R>(R);
 
-//------------ octetstring ---------------------------------------------------
+impl<R: Recipe> DerContent for ConstructedDerContent<R> {
+    fn is_constructed(&self) -> bool {
+        true
+    }
 
-/// Returns a recipe for writing the given content as DER octet string.
-pub fn octetstring(content: Recipe) -> Recipe {
-    value(universal(false, 4), content)
-}
-
-
-//------------ null ----------------------------------------------------------
-
-/// Returns a recipe for a DER-encoded null value.
-pub fn null() -> Recipe {
-    value(universal(false, 5), [].into())
-}
-
-
-//------------ sequence ------------------------------------------------------
-
-/// Returns a recipe for writing a values as a DER sequence.
-pub fn sequence<const N: usize>(items: [Recipe; N]) -> Recipe {
-    value(universal(true, 16), core::sequence(items))
-}
-
-
-//------------ set -----------------------------------------------------------
-
-/// Returns a recipe for writing a values as a DER set.
-pub fn set<const N: usize>(items: [Recipe; N]) -> Recipe {
-    value(universal(true, 17), core::sequence(items))
-}
-
-
-//------------ oid -----------------------------------------------------------
-
-/// Returns a recipe for writing an object identifier.
-pub fn oid<const N: usize>(items: [u128; N]) -> Recipe {
-    value(universal(false, 6), Oid(items).into())
-}
-
-struct Oid<const N: usize>([u128; N]);
-
-impl<const N: usize> Assemble for Oid<N> {
-    fn assemble(&self, target: &mut Fragment) {
-        assemble_base_7((self.0[0] * 40) + self.0[1], target);
-        for value in &self.0[2..] {
-            assemble_base_7(*value, target)
-        }
+    fn assemble_content(&self, target: &mut Fragment) {
+        self.0.assemble(target)
     }
 }
 
 
-//------------ printable_string ----------------------------------------------
+//------------ simple --------------------------------------------------------
 
-/// Returns a recipe for writing the given content as PrintableString.
-pub fn printable_string(content: impl Into<Recipe>) -> Recipe {
-    value(universal(false, 19), content.into())
+/// Returns a recipe for turning any recipe into simple DER content.
+pub fn simple<R>(recipe: R) -> SimpleDerContent<R> {
+    SimpleDerContent(recipe)
 }
 
+pub struct SimpleDerContent<R>(R);
 
-//------------ ia5_string ----------------------------------------------------
-
-/// Returns a recipe for writing the given content as IA5String.
-pub fn ia5_string(content: Recipe) -> Recipe {
-    value(universal(false, 22), content)
-}
-
-
-//------------ utc_time ------------------------------------------------------
-
-/// Returns a recipe for writing a time as a UTCTime value.
-pub fn utc_time(time: impl UtcTime) -> Recipe {
-    value(universal(false, 23), UtcTimeContent(time).into())
-}
-
-struct UtcTimeContent<T>(T);
-
-impl<T: UtcTime> Assemble for UtcTimeContent<T> {
-    fn assemble(&self, target: &mut Fragment) {
-        self.0.assemble_utc_time(target)
+impl<R: Recipe> DerContent for SimpleDerContent<R> {
+    fn is_constructed(&self) -> bool {
+        false
     }
-}
 
-pub trait UtcTime: 'static {
-    fn assemble_utc_time(&self, target: &mut Fragment);
-}
-
-impl UtcTime for &'static str {
-    fn assemble_utc_time(&self, target: &mut Fragment) {
-        target.extend_from_slice(self.as_bytes())
-    }
-}
-
-impl UtcTime for String {
-    fn assemble_utc_time(&self, target: &mut Fragment) {
-        target.extend_from_slice(self.as_bytes())
-    }
-}
-
-#[cfg(feature = "chrono")]
-impl UtcTime for chrono::DateTime<chrono::offset::Utc> {
-    fn assemble_utc_time(&self, target: &mut Fragment) {
-        use std::io::Write;
-
-        write!(target, "{}", self.format("%y%m%d%H%M%SZ")).unwrap();
+    fn assemble_content(&self, target: &mut Fragment) {
+        self.0.assemble(target)
     }
 }
 
 
-//------------ generalized_time ----------------------------------------------
+//------------ value et al. --------------------------------------------------
 
-/// Returns a recipe for writing a time as a GeneralizedTime value.
-pub fn generalized_time(time: impl GeneralizedTime) -> Recipe {
-    value(universal(false, 24), GeneralizedTimeContent(time).into())
+/// Returns a recipe for a DER encoded value.
+fn value<C>(tag: Tag, content: C) -> Value<C> {
+    Value { tag, content }
 }
 
-struct GeneralizedTimeContent<T>(T);
-
-impl<T: GeneralizedTime> Assemble for GeneralizedTimeContent<T> {
-    fn assemble(&self, target: &mut Fragment) {
-        self.0.assemble_generalized_time(target)
-    }
+/// Returns a recipe for a DER encoded value in the universal class.
+pub fn universal<C>(number: u128, content: C) -> Value<C> {
+    value(Tag::new(Class::Universal, number), content)
 }
 
-pub trait GeneralizedTime: 'static {
-    fn assemble_generalized_time(&self, target: &mut Fragment);
+/// Returns a recipe for a DER encoded value in the universal class.
+pub fn application<C>(number: u128, content: C) -> Value<C> {
+    value(Tag::new(Class::Application, number), content)
 }
 
-impl GeneralizedTime for &'static str {
-    fn assemble_generalized_time(&self, target: &mut Fragment) {
-        target.extend_from_slice(self.as_bytes())
-    }
+/// Returns a recipe for a DER encoded value in the universal class.
+pub fn context<C>(number: u128, content: C) -> Value<C> {
+    value(Tag::new(Class::Context, number), content)
 }
 
-impl GeneralizedTime for String {
-    fn assemble_generalized_time(&self, target: &mut Fragment) {
-        target.extend_from_slice(self.as_bytes())
-    }
-}
-
-#[cfg(feature = "chrono")]
-impl GeneralizedTime for chrono::DateTime<chrono::offset::Utc> {
-    fn assemble_generalized_time(&self, target: &mut Fragment) {
-        use std::io::Write;
-
-        write!(target, "{}", self.format("%Y%m%d%H%M%SZ")).unwrap();
-    }
+/// Returns a recipe for a DER encoded value in the universal class.
+pub fn private<C>(number: u128, content: C) -> Value<C> {
+    value(Tag::new(Class::Private, number), content)
 }
 
 
-//------------ x509_time -----------------------------------------------------
-
-/// Returns a recipe for writing a time value following the rules of RFC 5280.
-#[cfg(feature = "chrono")]
-pub fn x509_time(time: chrono::DateTime<chrono::offset::Utc>) -> Recipe {
-    if chrono::Datelike::year(&time) >= 2050 {
-        utc_time(time)
-    }
-    else {
-        generalized_time(time)
-    }
+pub struct Value<C> {
+    tag: Tag,
+    content: C,
 }
 
-
-//------------ explicit ------------------------------------------------------
-
-/// Returns a recipe for creating an explicitely context-specific taged value.
-pub fn explicit(number: u128, content: Recipe) -> Recipe {
-    value(tag(Class::Context, true, number), content)
-}
-
-
-//============ Low-level Recipes =============================================
-
-//------------ value ---------------------------------------------------------
-
-/// Returns a recipe for a generic DER value.
-///
-/// The recipe produces the tag of the value by running the _tag_ recipe,
-/// the both the length and actual content by running the _content_ recipe.
-pub fn value(tag: Recipe, content: Recipe) -> Recipe {
-    Value { tag, content }.into()
-}
-
-struct Value {
-    tag: Recipe,
-    content: Recipe
-}
-
-impl Value {
+impl<C: DerContent> Value<C> {
     fn assemble_length(length: usize, target: &mut Fragment) {
         // 10.1. Always definite form with the minimal number of octets.
         // So, if < 128 short form, otherwise long form.
@@ -328,46 +121,457 @@ impl Value {
     }
 }
 
-impl Assemble for Value {
+
+impl<C: DerContent> Recipe for Value<C> {
     fn assemble(&self, target: &mut Fragment) {
-        let content = self.content.to_fragment();
-        self.tag.assemble(target);
+        let mut content = Fragment::new();
+        self.content.assemble_content(&mut content);
+        self.tag.assemble(self.content.is_constructed(), target);
         Self::assemble_length(content.len(), target);
         target.extend_from_slice(content.as_ref());
     }
 }
 
+impl<C: DerContent> DerContent for Value<C> {
+    fn is_constructed(&self) -> bool {
+        true
+    }
 
-//------------ tag -----------------------------------------------------------
-
-/// Returns a recipe for a DER encoded tag.
-pub fn tag(class: Class, constructed: bool, number: u128) -> Recipe {
-    Tag { class, constructed, number }.into()
+    fn assemble_content(&self, target: &mut Fragment) {
+        self.assemble(target)
+    }
 }
 
-pub fn universal(constructed: bool, number: u128) -> Recipe {
-    tag(Class::Universal, constructed, number)
+
+//============ Standard Types ================================================
+
+//------------ boolean -------------------------------------------------------
+
+/// Returns a recipe for writing a DER-encoded boolean.
+pub fn boolean(x: bool) -> Boolean {
+    Boolean(
+        if x { 0xFF }
+        else { 0x00 }
+    )
 }
 
-pub fn context(constructed: bool, number: u128) -> Recipe {
-    tag(Class::Context, constructed, number)
+pub struct Boolean(u8);
+
+impl Recipe for Boolean {
+    fn assemble(&self, target: &mut Fragment) {
+        universal(1, self).assemble(target)
+    }
 }
 
+impl DerContent for Boolean {
+    fn is_constructed(&self) -> bool {
+        false
+    }
+
+    fn assemble_content(&self, target: &mut Fragment) {
+        target.push(self.0)
+    }
+}
+
+
+//------------ integer -------------------------------------------------------
+
+/// Returns a recipe for writing a DER-encoded integer.
+pub fn integer<C>(int: C) -> Integer<C> {
+    Integer(int)
+}
+
+pub trait IntegerContent {
+    fn assemble_integer(&self, target: &mut Fragment);
+}
+
+pub struct Integer<C>(C);
+
+impl<C: IntegerContent> Recipe for Integer<C> {
+    fn assemble(&self, target: &mut Fragment) {
+        universal(2, self).assemble(target)
+    }
+}
+
+impl<C: IntegerContent> DerContent for Integer<C> {
+    fn is_constructed(&self) -> bool {
+        false
+    }
+
+    fn assemble_content(&self, target: &mut Fragment) {
+        self.0.assemble_integer(target)
+    }
+}
+
+/// Assembles an unsigned integer from an slice in network byte order.
+fn assemble_unsigned_slice(mut slice: &[u8], target: &mut Fragment) {
+    // Skip over empty octets.
+    while slice.get(0).copied() == Some(0) {
+        slice = &slice[1..];
+    }
+
+    // If the left-most bit is set, we need to add another octet to signal
+    // that we have a positive integer.
+    if slice.get(0).copied().unwrap_or(0xFF) & 0x80 != 0 {
+        target.push(0);
+    }
+
+    // The rest is straightforward.
+    target.extend_from_slice(slice)
+}
+
+/// Assembles an unsigned integer from an slice in network byte order.
+fn assemble_signed_slice(mut slice: &[u8], target: &mut Fragment) {
+    // Check the left-most bit. If it is not set, the number is positive
+    // and we can fall back to an unsigned slice.
+    if slice.get(0).copied().unwrap_or(0xFF) & 0x80 == 0 {
+        return assemble_unsigned_slice(slice, target)
+    }
+
+    // We have a non-empty negative number. Because of the two’s complement
+    // thing, ununsed left octets are 0xFF.
+    while slice.get(0).copied() == Some(0xFF) {
+        slice = &slice[1..];
+    }
+
+    // The rest is straightforward.
+    if slice.is_empty() {
+        target.push(0xFF)
+    }
+    else {
+        target.extend_from_slice(slice)
+    }
+}
+
+impl IntegerContent for u8 {
+    fn assemble_integer(&self, target: &mut Fragment) {
+        if *self > 127 {
+            target.push(0);
+        }
+        target.push(*self);
+    }
+}
+
+impl IntegerContent for u16 {
+    fn assemble_integer(&self, target: &mut Fragment) {
+        assemble_unsigned_slice(&self.to_be_bytes(), target);
+    }
+}
+
+impl IntegerContent for u32 {
+    fn assemble_integer(&self, target: &mut Fragment) {
+        assemble_unsigned_slice(&self.to_be_bytes(), target);
+    }
+}
+
+impl IntegerContent for u64 {
+    fn assemble_integer(&self, target: &mut Fragment) {
+        assemble_unsigned_slice(&self.to_be_bytes(), target);
+    }
+}
+
+impl IntegerContent for u128 {
+    fn assemble_integer(&self, target: &mut Fragment) {
+        assemble_unsigned_slice(&self.to_be_bytes(), target);
+    }
+}
+
+impl IntegerContent for usize {
+    fn assemble_integer(&self, target: &mut Fragment) {
+        assemble_unsigned_slice(&self.to_be_bytes(), target);
+    }
+}
+
+impl IntegerContent for i8 {
+    fn assemble_integer(&self, target: &mut Fragment) {
+        target.push((*self) as u8)
+    }
+}
+
+impl IntegerContent for i16 {
+    fn assemble_integer(&self, target: &mut Fragment) {
+        assemble_signed_slice(&self.to_be_bytes(), target);
+    }
+}
+
+impl IntegerContent for i32 {
+    fn assemble_integer(&self, target: &mut Fragment) {
+        assemble_signed_slice(&self.to_be_bytes(), target);
+    }
+}
+
+impl IntegerContent for i64 {
+    fn assemble_integer(&self, target: &mut Fragment) {
+        assemble_signed_slice(&self.to_be_bytes(), target);
+    }
+}
+
+impl IntegerContent for i128 {
+    fn assemble_integer(&self, target: &mut Fragment) {
+        assemble_signed_slice(&self.to_be_bytes(), target);
+    }
+}
+
+impl IntegerContent for isize {
+    fn assemble_integer(&self, target: &mut Fragment) {
+        assemble_signed_slice(&self.to_be_bytes(), target);
+    }
+}
+
+impl<'a> IntegerContent for &'a [u8] {
+    fn assemble_integer(&self, target: &mut Fragment) {
+        assemble_signed_slice(self, target);
+    }
+}
+
+impl IntegerContent for Vec<u8> {
+    fn assemble_integer(&self, target: &mut Fragment) {
+        assemble_signed_slice(self.as_ref(), target);
+    }
+}
+
+
+//------------ integer_slice -------------------------------------------------
+
+/// Returns a recipe for writing a DER-encoded integer given as a slice.
+pub fn integer_slice<C>(int: C) -> IntegerSlice<C> {
+    IntegerSlice(int)
+}
+
+pub struct IntegerSlice<C>(C);
+
+impl<C: AsRef<[u8]>> Recipe for IntegerSlice<C> {
+    fn assemble(&self, target: &mut Fragment) {
+        universal(2, self).assemble(target)
+    }
+}
+
+impl<C: AsRef<[u8]>> DerContent for IntegerSlice<C> {
+    fn is_constructed(&self) -> bool {
+        false
+    }
+
+    fn assemble_content(&self, target: &mut Fragment) {
+        assemble_signed_slice(self.0.as_ref(), target);
+    }
+}
+
+
+//------------ bitstring -----------------------------------------------------
+
+/// Returns a recipe for writing a DER-encoded bitstring.
+///
+/// The content of the bit string will be taken from whatever the _content_
+/// recipe produces. The number of unused bits in the last octet of the
+/// content is given via _unused_. Note that for a correctly encoded bit
+/// string, the unused bits need to be zero. The recipe does _not_ ensure they
+/// are.
+///
+/// Naturally, _unused_ cannot be larger than 7. However, in order to make
+/// it possible to create broken values, the recipe does not check this
+/// either.
+pub fn bitstring<R: Recipe>(unused: u8, content: R) -> impl Recipe + DerContent {
+    StringValue::new(
+        Tag::universal(3),
+        sequence((literal([unused]), content))
+    )
+}
+
+
+//------------ octetstring ---------------------------------------------------
+
+/// Returns a recipe for writing the given content as DER octet string.
+pub fn octetstring<R>(content: R) -> StringValue<R> {
+    StringValue::new(Tag::universal(4), content)
+}
+
+
+//------------ null ----------------------------------------------------------
+
+/// Returns a recipe for a DER-encoded null value.
+pub fn null() -> Null {
+    Null
+}
+
+pub struct Null;
+
+impl Recipe for Null {
+    fn assemble(&self, target: &mut Fragment) {
+        universal(5, self).assemble(target)
+    }
+}
+
+impl DerContent for Null {
+    fn is_constructed(&self) -> bool {
+        false
+    }
+
+    fn assemble_content(&self, _: &mut Fragment) {
+    }
+}
+
+
+//------------ oid -----------------------------------------------------------
+
+/// Returns a recipe for writing an object identifier.
+pub fn oid<const N: usize>(items: [u128; N]) -> Oid<N> {
+    Oid(items)
+}
+
+pub struct Oid<const N: usize>([u128; N]);
+
+impl<const N: usize> DerContent for Oid<N> {
+    fn is_constructed(&self) -> bool {
+        false
+    }
+
+    fn assemble_content(&self, target: &mut Fragment) {
+        assemble_base_7((self.0[0] * 40) + self.0[1], target);
+        for value in &self.0[2..] {
+            assemble_base_7(*value, target)
+        }
+    }
+}
+
+impl<const N: usize> Recipe for Oid<N> {
+    fn assemble(&self, target: &mut Fragment) {
+        universal(6, self).assemble(target)
+    }
+}
+
+
+//------------ sequence ------------------------------------------------------
+
+/// Returns a recipe for writing a receipe as the content of a DER sequence.
+pub fn sequence(items: impl Recipe) -> impl Recipe {
+    universal(16, constructed(items))
+}
+
+
+//------------ set -----------------------------------------------------------
+
+/// Returns a recipe for writing a receipe as the content of a DER set.
+pub fn set(items: impl Recipe) -> impl Recipe {
+    universal(17, constructed(items))
+}
+
+
+//------------ printable_string ----------------------------------------------
+
+/// Returns a recipe for writing the given content as PrintableString.
+///
+/// Does not check if the content is a valid printable string.
+pub fn printable_string<R>(content: R) -> StringValue<R> {
+    StringValue::new(Tag::universal(19), content)
+}
+
+
+//------------ ia5_string ----------------------------------------------------
+
+/// Returns a recipe for writing the given content as IA5String.
+///
+/// Does not check if the content is a valid printable string.
+pub fn ia5_string<R>(content: R) -> StringValue<R> {
+    StringValue::new(Tag::universal(22), content)
+}
+
+
+//------------ utc_time and generalized_time ---------------------------------
+
+/// Returns a recipe for writing a time as a UTCTime value.
+pub fn utc_time<T>(time: T) -> UtcTime<T> {
+    UtcTime(time)
+}
+
+/// Returns a recipe for writing a time as a GeneralizedTime value.
+pub fn generalized_time<T>(time: T) -> GeneralizedTime<T> {
+    GeneralizedTime(time)
+}
+
+pub trait TimeContent {
+    fn assemble_utc_time(&self, target: &mut Fragment);
+    fn assemble_generalized_time(&self, target: &mut Fragment);
+}
+
+#[cfg(feature = "chrono")]
+impl TimeContent for chrono::DateTime<chrono::offset::Utc> {
+    fn assemble_utc_time(&self, target: &mut Fragment) {
+        use std::io::Write;
+
+        write!(target, "{}", self.format("%y%m%d%H%M%SZ")).unwrap();
+    }
+
+    fn assemble_generalized_time(&self, target: &mut Fragment) {
+        use std::io::Write;
+
+        write!(target, "{}", self.format("%Y%m%d%H%M%SZ")).unwrap();
+    }
+}
+
+pub struct UtcTime<T>(T);
+
+impl<T: TimeContent> Recipe for UtcTime<T> {
+    fn assemble(&self, target: &mut Fragment) {
+        universal(23, self).assemble(target)
+    }
+}
+
+impl<T: TimeContent> DerContent for UtcTime<T> {
+    fn is_constructed(&self) -> bool {
+        false
+    }
+
+    fn assemble_content(&self, target: &mut Fragment) {
+        self.0.assemble_utc_time(target);
+    }
+}
+
+pub struct GeneralizedTime<T>(T);
+
+impl<T: TimeContent> Recipe for GeneralizedTime<T> {
+    fn assemble(&self, target: &mut Fragment) {
+        universal(23, self).assemble(target)
+    }
+}
+
+impl<T: TimeContent> DerContent for GeneralizedTime<T> {
+    fn is_constructed(&self) -> bool {
+        false
+    }
+
+    fn assemble_content(&self, target: &mut Fragment) {
+        self.0.assemble_generalized_time(target);
+    }
+}
+
+
+//============ Helper Types ==================================================
+
+//------------ Tag -----------------------------------------------------------
+
+#[derive(Clone, Copy, Debug)]
 struct Tag {
     class: Class,
-    constructed: bool,
-    number: u128
+    number: u128,
 }
 
-impl Assemble for Tag {
-    fn assemble(&self, target: &mut Fragment) {
+impl Tag {
+    fn new(class: Class, number: u128) -> Self {
+        Tag { class, number }
+    }
+
+    fn universal(number: u128) -> Self {
+        Tag::new(Class::Universal, number)
+    }
+
+    fn assemble(&self, constructed: bool, target: &mut Fragment) {
         let mut first = match self.class {
             Class::Universal => 0,
             Class::Application => 0b0100_0000,
             Class::Context => 0b1000_0000,
             Class::Private => 0b1100_0000,
         };
-        if self.constructed {
+        if constructed {
             first = first | 0b0010_0000;
         }
         if self.number < 31 {
@@ -404,14 +608,78 @@ fn assemble_base_7(mut number: u128, target: &mut Fragment) {
     target.push(digits[18]);
 }
 
+
 //------------ Class ---------------------------------------------------------
 
 /// The class portion of a DER tag.
 #[derive(Clone, Copy, Debug)]
-pub enum Class {
+enum Class {
     Universal,
     Application,
     Context,
     Private,
+}
+
+
+//------------ StringValue ---------------------------------------------------
+
+/// Any of the many string types.
+pub struct StringValue<R> {
+    tag: Tag,
+    content: R,
+}
+
+impl<R> StringValue<R> {
+    fn new(tag: Tag, content: R) -> Self {
+        StringValue { tag, content }
+    }
+}
+
+impl<R: Recipe> DerContent for StringValue<R> {
+    fn is_constructed(&self) -> bool {
+        false
+    }
+
+    fn assemble_content(&self, target: &mut Fragment) {
+        self.content.assemble(target)
+    }
+}
+
+impl<R: Recipe> Recipe for StringValue<R> {
+    fn assemble(&self, target: &mut Fragment) {
+        value(self.tag, self).assemble(target)
+    }
+}
+
+
+//============ Tests =========================================================
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn der_boolean() {
+        assert_eq!(boolean(true).to_fragment(), b"\x01\x01\xFF");
+        assert_eq!(boolean(false).to_fragment(), b"\x01\x01\x00");
+        assert_eq!(
+            context(0, boolean(true)).to_fragment(),
+            b"\x80\x01\xFF"
+        );
+    }
+
+    #[test]
+    fn der_integer() {
+        assert_eq!(integer(0u8).to_fragment(), b"\x02\x01\x00");
+        assert_eq!(integer(0u32).to_fragment(), b"\x02\x01\x00");
+        assert_eq!(integer(0i128).to_fragment(), b"\x02\x01\x00");
+
+        assert_eq!(integer(-1i8).to_fragment(), b"\x02\x01\xFF");
+        assert_eq!(integer(-1i32).to_fragment(), b"\x02\x01\xFF");
+        assert_eq!(integer(-1i128).to_fragment(), b"\x02\x01\xFF");
+        assert_eq!(integer(-2i8).to_fragment(), b"\x02\x01\xFE");
+        assert_eq!(integer(-2i32).to_fragment(), b"\x02\x01\xFE");
+        assert_eq!(integer(-2i128).to_fragment(), b"\x02\x01\xFE");
+    }
 }
 
